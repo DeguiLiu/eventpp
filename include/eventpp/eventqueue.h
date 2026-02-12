@@ -402,6 +402,27 @@ public:
 	template <class Rep, class Period>
 	bool waitFor(const std::chrono::duration<Rep, Period> & duration) const
 	{
+		// OPT-8: Adaptive spin before CV wait.
+		// Phase 1: Fast check — avoid any synchronization overhead.
+		if(doCanProcess()) {
+			return true;
+		}
+
+		// Phase 2: Spin briefly to avoid futex syscall overhead (~1-5us).
+		// On ARM, YIELD instruction hints the core to release resources.
+		// 128 iterations ~ 0.5-2us on most cores, well below futex cost.
+		for(int i = 0; i < 128; ++i) {
+			if(doCanProcess()) {
+				return true;
+			}
+#if defined(__aarch64__) || defined(__arm__)
+			__asm__ __volatile__("yield");
+#elif defined(__x86_64__) || defined(_M_X64) || defined(__i386__)
+			__builtin_ia32_pause();
+#endif
+		}
+
+		// Phase 3: Fall back to CV wait (futex).
 		std::unique_lock<Mutex> queueListLock(queueListMutex);
 		return queueListConditionVariable.wait_for(queueListLock, duration, [this]() -> bool {
 			return doCanProcess();
@@ -502,11 +523,13 @@ protected:
 	{
 		BufferedItemList tempList;
 		if(! freeList.empty()) {
-			{
-				std::lock_guard<Mutex> queueListLock(freeListMutex);
-				if(! freeList.empty()) {
-					tempList.splice(tempList.end(), freeList, freeList.begin());
-				}
+			// OPT-4: Use try_lock to avoid blocking on freeListMutex.
+			// If contended, skip recycling and allocate fresh — the item
+			// will be recycled later. This eliminates freeListMutex as a
+			// bottleneck on the enqueue hot path.
+			std::unique_lock<Mutex> lock(freeListMutex, std::try_to_lock);
+			if(lock.owns_lock() && ! freeList.empty()) {
+				tempList.splice(tempList.end(), freeList, freeList.begin());
 			}
 		}
 
