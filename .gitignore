@@ -3,3 +3,5 @@ tests/build/project*
 tests/coverage
 build
 .vscode
+build*
+tests/build*

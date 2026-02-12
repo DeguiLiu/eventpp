@@ -1,8 +1,8 @@
 cmake_minimum_required(VERSION 3.5)
-project(eventpp VERSION 0.1.3)
+project(eventpp VERSION 0.2.0)
 
 add_library(eventpp INTERFACE)
-set(CMAKE_CXX_STANDARD 11)
+set(CMAKE_CXX_STANDARD 14)
 
 include(GNUInstallDirs)
 target_include_directories(
