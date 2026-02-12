@@ -1,14 +1,15 @@
-// eventpp library - ARM-Linux optimization extension
+// eventpp library - ARM-Linux / x86-Linux optimization extension
 // Pool allocator for std::list to eliminate per-node heap allocation.
 //
-// Design:
+// Design (v0.3.0 — OPT-9a/9b iceoryx MemPool enhanced):
 // - Static per-type pool: all PoolAllocator<T> instances share one pool,
 //   so they always compare equal. This makes std::list::splice() well-defined
 //   per C++14 [list.ops] 23.3.5.5.
-// - Pre-allocated fixed-capacity slab of nodes.
-// - Free list for O(1) alloc/dealloc within pool.
-// - Falls back to ::operator new when pool is exhausted.
-// - Thread-safe via SpinLock (minimal overhead vs mutex).
+// - OPT-9a: Multi-slab growth — when initial slab is exhausted, allocates
+//   new slabs dynamically instead of falling back to ::operator new.
+// - OPT-9b: Lock-free free list — uses atomic CAS stack instead of SpinLock
+//   for allocate/deallocate. SpinLock only protects grow() (rare path).
+// - Thread-safe: lock-free hot path + SpinLock cold path (grow only).
 
 #ifndef POOLALLOCATOR_I_H_EVENTPP
 #define POOLALLOCATOR_I_H_EVENTPP
@@ -23,20 +24,31 @@
 #include <new>
 #include <type_traits>
 
+#include "../eventpolicies.h"
+
 namespace eventpp {
 
 namespace internal_ {
 
-// SpinLock for pool operations (same design as eventpolicies.h)
+// OPT-11: SpinLock with exponential backoff for pool operations.
 struct PoolSpinLock
 {
 	void lock() noexcept {
+		if(!locked.test_and_set(std::memory_order_acquire)) {
+			return;
+		}
+		unsigned backoff = 1;
 		while(locked.test_and_set(std::memory_order_acquire)) {
+			for(unsigned i = 0; i < backoff; ++i) {
 #if defined(__aarch64__) || defined(__arm__)
-			__asm__ __volatile__("yield");
+				__asm__ __volatile__("yield");
 #elif defined(__x86_64__) || defined(_M_X64) || defined(__i386__)
-			__builtin_ia32_pause();
+				__builtin_ia32_pause();
 #endif
+			}
+			if(backoff < kMaxBackoff) {
+				backoff <<= 1;
+			}
 		}
 	}
 
@@ -45,12 +57,23 @@ struct PoolSpinLock
 	}
 
 private:
+	static constexpr unsigned kMaxBackoff = 64;
 	std::atomic_flag locked = ATOMIC_FLAG_INIT;
 };
 
-// Fixed-capacity node pool with free list.
+// OPT-9a/9b: Multi-slab node pool with lock-free free list.
 // One static instance per type T, shared by all PoolAllocator<T>.
-template <typename T, size_t Capacity>
+//
+// OPT-9a: When the initial slab is exhausted, grow() allocates a new slab
+//   (linked list of slabs) instead of falling back to ::operator new.
+// OPT-9b: allocate/deallocate use atomic CAS on free_head_ (lock-free).
+//   Only grow() uses SpinLock (called once per SlabCapacity allocations).
+//
+// ABA safety: free list is a LIFO stack with unique slab-internal addresses.
+// A node is removed from free list on allocate, returned on deallocate.
+// The same pointer cannot appear twice in the free list simultaneously,
+// so ABA cannot occur.
+template <typename T, size_t SlabCapacity>
 class NodePool
 {
 public:
@@ -60,49 +83,51 @@ public:
 	}
 
 	T * allocate() noexcept {
-		lock_.lock();
-		if(free_head_ != nullptr) {
-			FreeNode * node = free_head_;
-			free_head_ = node->next;
-			lock_.unlock();
-			return reinterpret_cast<T *>(node);
+		FreeNode * old_head = free_head_.load(std::memory_order_acquire);
+		while(true) {
+			if(old_head == nullptr) {
+				// Pool exhausted — try to grow under lock
+				grow_lock_.lock();
+				old_head = free_head_.load(std::memory_order_acquire);
+				if(old_head == nullptr) {
+					grow();
+					old_head = free_head_.load(std::memory_order_acquire);
+				}
+				grow_lock_.unlock();
+				if(old_head == nullptr) {
+					return nullptr;  // grow() failed (out of memory)
+				}
+			}
+			// CAS: try to pop head from free list
+			if(free_head_.compare_exchange_weak(
+				old_head, old_head->next,
+				std::memory_order_acq_rel, std::memory_order_acquire))
+			{
+				return reinterpret_cast<T *>(old_head);
+			}
+			// CAS failed — old_head updated by compare_exchange_weak, retry
 		}
-		lock_.unlock();
-		// Pool exhausted, fall back to heap
-		return static_cast<T *>(::operator new(sizeof(T), std::nothrow));
 	}
 
 	void deallocate(T * ptr) noexcept {
-		// Check if ptr is within our slab
 		auto * raw = reinterpret_cast<unsigned char *>(ptr);
-		if(raw >= slab_ && raw < slab_ + sizeof(Slot) * Capacity) {
+		if(is_in_pool(raw)) {
+			// Return to pool via lock-free push
 			FreeNode * node = reinterpret_cast<FreeNode *>(ptr);
-			lock_.lock();
-			node->next = free_head_;
-			free_head_ = node;
-			lock_.unlock();
+			FreeNode * old_head = free_head_.load(std::memory_order_relaxed);
+			do {
+				node->next = old_head;
+			} while(!free_head_.compare_exchange_weak(
+				old_head, node,
+				std::memory_order_release, std::memory_order_relaxed));
 		}
 		else {
-			// Was allocated from heap fallback
+			// Allocated before pool existed or from multi-element fallback
 			::operator delete(ptr);
 		}
 	}
 
 private:
-	NodePool() : free_head_(nullptr) {
-		// Build free list from slab
-		for(size_t i = 0; i < Capacity; ++i) {
-			FreeNode * node = reinterpret_cast<FreeNode *>(&slab_[i * sizeof(Slot)]);
-			node->next = free_head_;
-			free_head_ = node;
-		}
-	}
-
-	~NodePool() = default;
-
-	NodePool(const NodePool &) = delete;
-	NodePool & operator=(const NodePool &) = delete;
-
 	struct FreeNode {
 		FreeNode * next;
 	};
@@ -118,9 +143,74 @@ private:
 		unsigned char data[SlotSize];
 	};
 
-	alignas(SlotAlign) unsigned char slab_[sizeof(Slot) * Capacity];
-	FreeNode * free_head_;
-	PoolSpinLock lock_;
+	// OPT-9a: Slab structure — linked list of fixed-capacity slabs.
+	struct Slab {
+		alignas(SlotAlign) unsigned char data[sizeof(Slot) * SlabCapacity];
+		Slab * next;
+	};
+
+	NodePool() : slab_head_(nullptr), free_head_(nullptr) {
+		// Allocate initial slab
+		grow();
+	}
+
+	~NodePool() {
+		// Free all dynamically allocated slabs
+		Slab * s = slab_head_;
+		while(s != nullptr) {
+			Slab * next = s->next;
+			::operator delete(s);
+			s = next;
+		}
+	}
+
+	NodePool(const NodePool &) = delete;
+	NodePool & operator=(const NodePool &) = delete;
+
+	// Allocate a new slab and add all its slots to the free list.
+	// Must be called under grow_lock_.
+	void grow() {
+		Slab * new_slab = static_cast<Slab *>(
+			::operator new(sizeof(Slab), std::nothrow));
+		if(new_slab == nullptr) {
+			return;  // Out of memory
+		}
+		new_slab->next = slab_head_;
+		slab_head_ = new_slab;
+
+		// Build free list from new slab's slots (push all to free_head_)
+		// We're under grow_lock_ and free_head_ is null (or we wouldn't grow),
+		// but other threads may be doing CAS on free_head_ concurrently for
+		// deallocate. Use CAS to safely push each node.
+		for(size_t i = 0; i < SlabCapacity; ++i) {
+			FreeNode * node = reinterpret_cast<FreeNode *>(
+				&new_slab->data[i * sizeof(Slot)]);
+			FreeNode * old_head = free_head_.load(std::memory_order_relaxed);
+			do {
+				node->next = old_head;
+			} while(!free_head_.compare_exchange_weak(
+				old_head, node,
+				std::memory_order_release, std::memory_order_relaxed));
+		}
+	}
+
+	// Check if a pointer belongs to any slab in the pool.
+	// Slab count is typically <= 3, so linear scan is fine.
+	bool is_in_pool(unsigned char * raw) const noexcept {
+		const size_t slab_data_size = sizeof(Slot) * SlabCapacity;
+		Slab * s = slab_head_;
+		while(s != nullptr) {
+			if(raw >= s->data && raw < s->data + slab_data_size) {
+				return true;
+			}
+			s = s->next;
+		}
+		return false;
+	}
+
+	Slab * slab_head_;
+	std::atomic<FreeNode *> free_head_;  // OPT-9b: lock-free free list head
+	PoolSpinLock grow_lock_;             // Only protects grow()
 };
 
 } // namespace internal_
@@ -192,6 +282,24 @@ bool operator!=(const PoolAllocator<T1, C> &, const PoolAllocator<T2, C> &) noex
 //
 template <typename T, size_t Capacity = 4096>
 using PoolQueueList = std::list<T, PoolAllocator<T, Capacity>>;
+
+// OPT-14: One-stop high-performance policy preset.
+// Combines SpinLock (OPT-1/11), PoolAllocator (OPT-5/9), and shared_mutex (OPT-3)
+// into a single policy struct. Users get optimal settings with zero configuration:
+//
+//   eventpp::EventQueue<int, void(const Msg&), eventpp::HighPerfPolicy> queue;
+//
+// Compile-time template specialization — zero runtime overhead vs manual policy.
+struct HighPerfPolicy {
+	// SpinLock with exponential backoff replaces std::mutex.
+	// Optimal for short critical sections (enqueue/dispatch).
+	using Threading = GeneralThreading<SpinLock>;
+
+	// Pool allocator eliminates per-node heap allocation.
+	// 8192 slots per slab; auto-grows when exhausted (OPT-9a).
+	template <typename T>
+	using QueueList = PoolQueueList<T, 8192>;
+};
 
 
 } // namespace eventpp

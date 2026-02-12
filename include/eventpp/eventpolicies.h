@@ -25,9 +25,16 @@
 
 namespace eventpp {
 
-// Cache-line size for alignment (configurable via compile flag)
+// OPT-10: Cache-line size for alignment with platform auto-detection.
+// Apple Silicon (M1/M2/M3) uses 128-byte L2 prefetch granularity;
+// x86 and Cortex-A53/A55/A72/A76/Neoverse use 64-byte cache lines.
+// User can override via compile flag: -DEVENTPP_CACHELINE_SIZE=128
 #ifndef EVENTPP_CACHELINE_SIZE
-#define EVENTPP_CACHELINE_SIZE 64
+	#if defined(__APPLE__) && defined(__aarch64__)
+		#define EVENTPP_CACHELINE_SIZE 128
+	#else
+		#define EVENTPP_CACHELINE_SIZE 64
+	#endif
 #endif
 
 #define EVENTPP_ALIGN_CACHELINE alignas(EVENTPP_CACHELINE_SIZE)
@@ -42,17 +49,35 @@ struct TagHeterCallbackList : public TagHeter {};
 struct TagHeterEventDispatcher : public TagHeter {};
 struct TagHeterEventQueue : public TagHeter {};
 
+// OPT-11: SpinLock with exponential backoff.
+// Fast path: single test_and_set for uncontended case (zero overhead).
+// Slow path: exponential backoff reduces cache-line bouncing under contention.
 struct SpinLock
 {
 public:
 	void lock() {
-		while(locked.test_and_set(std::memory_order_acquire)) {
-#if defined(__aarch64__) || defined(__arm__)
-			__asm__ __volatile__("yield");
-#elif defined(__x86_64__) || defined(_M_X64) || defined(__i386__)
-			__builtin_ia32_pause();
-#endif
+		// Fast path: no contention
+		if(!locked.test_and_set(std::memory_order_acquire)) {
+			return;
 		}
+		// Slow path: exponential backoff
+		unsigned backoff = 1;
+		while(locked.test_and_set(std::memory_order_acquire)) {
+			for(unsigned i = 0; i < backoff; ++i) {
+#if defined(__aarch64__) || defined(__arm__)
+				__asm__ __volatile__("yield");
+#elif defined(__x86_64__) || defined(_M_X64) || defined(__i386__)
+				__builtin_ia32_pause();
+#endif
+			}
+			if(backoff < kMaxBackoff) {
+				backoff <<= 1;
+			}
+		}
+	}
+
+	bool try_lock() {
+		return !locked.test_and_set(std::memory_order_acquire);
 	}
 
 	void unlock() {
@@ -60,7 +85,8 @@ public:
 	}
 
 private:
-    std::atomic_flag locked = ATOMIC_FLAG_INIT;
+	static constexpr unsigned kMaxBackoff = 64;
+	std::atomic_flag locked = ATOMIC_FLAG_INIT;
 };
 
 template <
