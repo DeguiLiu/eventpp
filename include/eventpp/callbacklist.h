@@ -18,6 +18,7 @@
 
 #include <functional>
 #include <mutex>
+#include <vector>
 #include <cassert>
 
 namespace eventpp {
@@ -296,26 +297,54 @@ public:
 	// We don't use the patch as main code because the patch generates longer code, and duplicated with doForEachIf.
 	void operator() (Args ...args) const
 	{
-		NodePtr node;
+		const Counter counter = currentCounter.load(std::memory_order_acquire);
 
+		// OPT-2: Batched prefetch traversal — same as doForEachIf.
+		static constexpr size_t kBatchSize = 8;
+		NodePtr batch[kBatchSize];
+
+		NodePtr node;
 		{
 			std::lock_guard<Mutex> lockGuard(mutex);
 			node = head;
 		}
 
-		const Counter counter = currentCounter.load(std::memory_order_acquire);
-
 		while(node) {
-			if(node->counter != removedCounter && counter >= node->counter) {
-				node->callback(args...);
-				if(! CanContinueInvoking::canContinueInvoking(args...)) {
-					break;
+			size_t count = 0;
+			{
+				std::lock_guard<Mutex> lockGuard(mutex);
+				NodePtr cur = node;
+				while(cur && count < kBatchSize) {
+					batch[count++] = cur;
+					cur = cur->next;
 				}
+			}
+
+			bool shouldBreak = false;
+			for(size_t i = 0; i < count; ++i) {
+				if(batch[i]->counter != removedCounter && counter >= batch[i]->counter) {
+					batch[i]->callback(args...);
+					if(! CanContinueInvoking::canContinueInvoking(args...)) {
+						shouldBreak = true;
+						break;
+					}
+				}
+			}
+
+			if(shouldBreak) {
+				for(size_t j = 0; j < count; ++j) {
+					batch[j].reset();
+				}
+				break;
 			}
 
 			{
 				std::lock_guard<Mutex> lockGuard(mutex);
-				node = node->next;
+				node = batch[count - 1]->next;
+			}
+
+			for(size_t j = 0; j < count; ++j) {
+				batch[j].reset();
 			}
 		}
 	}
@@ -325,25 +354,57 @@ private:
 	template <typename F>
 	bool doForEachIf(F && f) const
 	{
-		NodePtr node;
+		const Counter counter = currentCounter.load(std::memory_order_acquire);
 
+		// OPT-2: Batched prefetch traversal.
+		// Original: locks/unlocks mutex for EACH node->next read (N lock pairs).
+		// Optimized: lock once to prefetch a batch of upcoming nodes, then iterate
+		// the batch without lock. Re-lock to fetch next batch.
+		// This preserves re-entrant append semantics (newly appended nodes are
+		// visible in subsequent batches) while reducing lock operations by ~8x.
+		static constexpr size_t kBatchSize = 8;
+		NodePtr batch[kBatchSize];
+
+		NodePtr node;
 		{
 			std::lock_guard<Mutex> lockGuard(mutex);
 			node = head;
 		}
 
-		const Counter counter = currentCounter.load(std::memory_order_acquire);
-
 		while(node) {
-			if(node->counter != removedCounter && counter >= node->counter) {
-				if(! f(node)) {
-					return false;
+			// Prefetch a batch of nodes under one lock
+			size_t count = 0;
+			{
+				std::lock_guard<Mutex> lockGuard(mutex);
+				NodePtr cur = node;
+				while(cur && count < kBatchSize) {
+					batch[count++] = cur;
+					cur = cur->next;
 				}
 			}
 
+			// Iterate the batch without lock
+			for(size_t i = 0; i < count; ++i) {
+				if(batch[i]->counter != removedCounter && counter >= batch[i]->counter) {
+					if(! f(batch[i])) {
+						// Clear batch to release shared_ptr refs
+						for(size_t j = 0; j < count; ++j) {
+							batch[j].reset();
+						}
+						return false;
+					}
+				}
+			}
+
+			// Next batch starts from the last node's next
 			{
 				std::lock_guard<Mutex> lockGuard(mutex);
-				node = node->next;
+				node = batch[count - 1]->next;
+			}
+
+			// Clear batch to release shared_ptr refs
+			for(size_t j = 0; j < count; ++j) {
+				batch[j].reset();
 			}
 		}
 
