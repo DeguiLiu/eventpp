@@ -21,6 +21,7 @@
 #include <map>
 #include <unordered_map>
 #include <list>
+#include <shared_mutex>
 
 namespace eventpp {
 
@@ -65,11 +66,14 @@ private:
 template <
 	typename Mutex_,
 	template <typename > class Atomic_ = std::atomic,
-	typename ConditionVariable_ = std::condition_variable
+	typename ConditionVariable_ = std::condition_variable,
+	typename SharedMutex_ = std::shared_timed_mutex
 >
 struct GeneralThreading
 {
 	using Mutex = Mutex_;
+
+	using SharedMutex = SharedMutex_;
 
 	template <typename T>
 	using Atomic = Atomic_<T>;
@@ -80,6 +84,10 @@ struct GeneralThreading
 struct MultipleThreading
 {
 	using Mutex = std::mutex;
+
+	// OPT-3: SharedMutex for read-write lock separation in EventDispatcher.
+	// std::shared_timed_mutex is C++14 compatible.
+	using SharedMutex = std::shared_timed_mutex;
 
 	template <typename T>
 	using Atomic = std::atomic<T>;
@@ -93,6 +101,15 @@ struct SingleThreading
 	{
 		void lock() {}
 		void unlock() {}
+	};
+
+	// OPT-3: No-op SharedMutex for single-threaded use.
+	struct SharedMutex
+	{
+		void lock() {}
+		void unlock() {}
+		void lock_shared() {}
+		void unlock_shared() {}
 	};
 	
 	template <typename T>

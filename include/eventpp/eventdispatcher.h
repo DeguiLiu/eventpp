@@ -89,6 +89,7 @@ public:
 	using Callback = Callback_;
 	using Event = EventType_;
 	using Mutex = typename Threading::Mutex;
+	using SharedMutex = typename Threading::SharedMutex;
 
 public:
 	EventDispatcherBase()
@@ -132,21 +133,21 @@ public:
 
 	Handle appendListener(const Event & event, const Callback & callback)
 	{
-		std::lock_guard<Mutex> lockGuard(listenerMutex);
+		std::unique_lock<SharedMutex> lockGuard(listenerMutex);
 
 		return eventCallbackListMap[event].append(callback);
 	}
 
 	Handle prependListener(const Event & event, const Callback & callback)
 	{
-		std::lock_guard<Mutex> lockGuard(listenerMutex);
+		std::unique_lock<SharedMutex> lockGuard(listenerMutex);
 
 		return eventCallbackListMap[event].prepend(callback);
 	}
 
 	Handle insertListener(const Event & event, const Callback & callback, const Handle & before)
 	{
-		std::lock_guard<Mutex> lockGuard(listenerMutex);
+		std::unique_lock<SharedMutex> lockGuard(listenerMutex);
 
 		return eventCallbackListMap[event].insert(callback, before);
 	}
@@ -260,7 +261,11 @@ private:
 	static auto doFindCallableListHelper(T * self, const Event & e)
 		-> typename std::conditional<std::is_const<T>::value, const CallbackList_ *, CallbackList_ *>::type
 	{
-		std::lock_guard<Mutex> lockGuard(self->listenerMutex);
+		// OPT-3: Use shared_lock (read lock) instead of exclusive lock.
+		// dispatch() is the hot path (high frequency, read-only map access).
+		// appendListener() is the cold path (low frequency, map modification).
+		// shared_lock allows concurrent dispatches without blocking each other.
+		std::shared_lock<SharedMutex> lockGuard(self->listenerMutex);
 
 		auto it = self->eventCallbackListMap.find(e);
 		if(it != self->eventCallbackListMap.end()) {
@@ -290,7 +295,7 @@ private:
 
 private:
 	Map eventCallbackListMap;
-	mutable Mutex listenerMutex;
+	mutable SharedMutex listenerMutex;
 };
 
 

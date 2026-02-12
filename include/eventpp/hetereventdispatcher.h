@@ -72,6 +72,7 @@ public:
 	using Handle = typename CallbackList_::Handle;
 	using Event = EventType_;
 	using Mutex = typename Threading::Mutex;
+	using SharedMutex = typename Threading::SharedMutex;
 
 public:
 	HeterEventDispatcherBase()
@@ -116,7 +117,7 @@ public:
 	template <typename C>
 	Handle appendListener(const Event & event, const C & callback)
 	{
-		std::lock_guard<Mutex> lockGuard(listenerMutex);
+		std::unique_lock<SharedMutex> lockGuard(listenerMutex);
 
 		return eventCallbackListMap[event].append(callback);
 	}
@@ -124,7 +125,7 @@ public:
 	template <typename C>
 	Handle prependListener(const Event & event, const C & callback)
 	{
-		std::lock_guard<Mutex> lockGuard(listenerMutex);
+		std::unique_lock<SharedMutex> lockGuard(listenerMutex);
 
 		return eventCallbackListMap[event].prepend(callback);
 	}
@@ -132,7 +133,7 @@ public:
 	template <typename C>
 	Handle insertListener(const Event & event, const C & callback, const Handle & before)
 	{
-		std::lock_guard<Mutex> lockGuard(listenerMutex);
+		std::unique_lock<SharedMutex> lockGuard(listenerMutex);
 
 		return eventCallbackListMap[event].insert(callback, before);
 	}
@@ -255,7 +256,7 @@ private:
 	static auto doFindCallableListHelper(T * self, const Event & e)
 		-> typename std::conditional<std::is_const<T>::value, const CallbackList_ *, CallbackList_ *>::type
 	{
-		std::lock_guard<Mutex> lockGuard(self->listenerMutex);
+		std::shared_lock<SharedMutex> lockGuard(self->listenerMutex);
 
 		auto it = self->eventCallbackListMap.find(e);
 		if(it != self->eventCallbackListMap.end()) {
@@ -287,7 +288,7 @@ private:
 
 private:
 	Map eventCallbackListMap;
-	mutable Mutex listenerMutex;
+	mutable SharedMutex listenerMutex;
 };
 
 } //namespace internal_
