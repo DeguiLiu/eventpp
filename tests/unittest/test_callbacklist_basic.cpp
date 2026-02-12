@@ -111,6 +111,47 @@ TEST_CASE("CallbackList, remove inside callback")
 	RemovalTester(7, 3, { 6, 4, 5, 3, 1, 2, 0 }).test();
 }
 
+TEST_CASE("CallbackList, remove inside callback, cross-batch (OPT-2 kBatchSize=8)")
+{
+	// OPT-2 uses batched prefetch with kBatchSize=8.
+	// These tests exercise remove operations at batch boundaries (index 7/8)
+	// and across multiple batches to verify no Use-After-Free or incorrect skipping.
+
+	// 16 callbacks (2 batches): remover at 0, remove batch boundary nodes
+	RemovalTester(16, 0, { 7 }).test();    // last in batch 1
+	RemovalTester(16, 0, { 8 }).test();    // first in batch 2
+	RemovalTester(16, 0, { 7, 8 }).test(); // both sides of boundary
+
+	// Remover at batch boundary (index 7)
+	RemovalTester(16, 7, { 0 }).test();
+	RemovalTester(16, 7, { 8 }).test();
+	RemovalTester(16, 7, { 15 }).test();
+	RemovalTester(16, 7, { 0, 8, 15 }).test();
+
+	// Remover in second batch, remove from first
+	RemovalTester(16, 8, { 0 }).test();
+	RemovalTester(16, 8, { 7 }).test();
+	RemovalTester(16, 8, { 15 }).test();
+	RemovalTester(16, 8, { 0, 7, 15 }).test();
+
+	// Remove entire rest-of-batch from position 0
+	RemovalTester(16, 0, { 1, 2, 3, 4, 5, 6, 7 }).test();
+
+	// Remove entire second batch
+	RemovalTester(16, 0, { 8, 9, 10, 11, 12, 13, 14, 15 }).test();
+
+	// Remove everything except remover
+	RemovalTester(16, 0, { 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15 }).test();
+	RemovalTester(16, 7, { 0,1,2,3,4,5,6,8,9,10,11,12,13,14,15 }).test();
+	RemovalTester(16, 15, { 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14 }).test();
+
+	// 24 callbacks (3 batches): test multi-batch boundary crossings
+	RemovalTester(24, 0, { 7, 8, 15, 16, 23 }).test();
+	RemovalTester(24, 7, { 8, 15, 16, 23 }).test();
+	RemovalTester(24, 15, { 0, 7, 8, 16, 23 }).test();
+	RemovalTester(24, 0, { 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23 }).test();
+}
+
 TEST_CASE("CallbackList, no memory leak after callback list is freed")
 {
 	using CL = eventpp::CallbackList<void(), FakeCallbackListPolicies>;

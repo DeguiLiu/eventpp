@@ -19,6 +19,7 @@
 
 #include <tuple>
 #include <chrono>
+#include <thread>
 
 namespace eventpp {
 
@@ -402,15 +403,14 @@ public:
 	template <class Rep, class Period>
 	bool waitFor(const std::chrono::duration<Rep, Period> & duration) const
 	{
-		// OPT-8: Adaptive spin before CV wait.
+		// OPT-8: Three-phase adaptive backoff: Spin -> Yield -> Sleep
 		// Phase 1: Fast check — avoid any synchronization overhead.
 		if(doCanProcess()) {
 			return true;
 		}
 
-		// Phase 2: Spin briefly to avoid futex syscall overhead (~1-5us).
-		// On ARM, YIELD instruction hints the core to release resources.
-		// 128 iterations ~ 0.5-2us on most cores, well below futex cost.
+		// Phase 2: Spin with CPU hint (~0.5-2us).
+		// Cheapest wait: no syscall, no context switch.
 		for(int i = 0; i < 128; ++i) {
 			if(doCanProcess()) {
 				return true;
@@ -422,7 +422,17 @@ public:
 #endif
 		}
 
-		// Phase 3: Fall back to CV wait (futex).
+		// Phase 3: Yield time slice (~2-20us).
+		// Gives up CPU without sleeping — smoother than jumping to futex
+		// under high scheduling load.
+		for(int i = 0; i < 16; ++i) {
+			if(doCanProcess()) {
+				return true;
+			}
+			std::this_thread::yield();
+		}
+
+		// Phase 4: Fall back to CV wait (futex).
 		std::unique_lock<Mutex> queueListLock(queueListMutex);
 		return queueListConditionVariable.wait_for(queueListLock, duration, [this]() -> bool {
 			return doCanProcess();
