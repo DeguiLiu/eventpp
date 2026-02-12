@@ -24,6 +24,13 @@
 
 namespace eventpp {
 
+// Cache-line size for alignment (configurable via compile flag)
+#ifndef EVENTPP_CACHELINE_SIZE
+#define EVENTPP_CACHELINE_SIZE 64
+#endif
+
+#define EVENTPP_ALIGN_CACHELINE alignas(EVENTPP_CACHELINE_SIZE)
+
 struct TagHomo {};
 struct TagCallbackList : public TagHomo {};
 struct TagEventDispatcher : public TagHomo {};
@@ -39,13 +46,18 @@ struct SpinLock
 public:
 	void lock() {
 		while(locked.test_and_set(std::memory_order_acquire)) {
+#if defined(__aarch64__) || defined(__arm__)
+			__asm__ __volatile__("yield");
+#elif defined(__x86_64__) || defined(_M_X64) || defined(__i386__)
+			__builtin_ia32_pause();
+#endif
 		}
 	}
 
 	void unlock() {
 		locked.clear(std::memory_order_release);
 	}
-	
+
 private:
     std::atomic_flag locked = ATOMIC_FLAG_INIT;
 };
@@ -117,6 +129,20 @@ struct SingleThreading
 		T operator -- () noexcept
 		{
 			return --value;
+		}
+
+		T fetch_add(T arg, std::memory_order /*order*/ = std::memory_order_seq_cst) noexcept
+		{
+			const T previous = value;
+			value += arg;
+			return previous;
+		}
+
+		T fetch_sub(T arg, std::memory_order /*order*/ = std::memory_order_seq_cst) noexcept
+		{
+			const T previous = value;
+			value -= arg;
+			return previous;
 		}
 
 		T value;

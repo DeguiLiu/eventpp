@@ -522,12 +522,12 @@ protected:
 	}
 
 private:
-	mutable ConditionVariable queueListConditionVariable;
+	EVENTPP_ALIGN_CACHELINE mutable ConditionVariable queueListConditionVariable;
 	typename Threading::template Atomic<int> queueEmptyCounter;
 	typename Threading::template Atomic<int> queueNotifyCounter;
-	mutable Mutex queueListMutex;
+	EVENTPP_ALIGN_CACHELINE mutable Mutex queueListMutex;
 	BufferedItemList queueList;
-	Mutex freeListMutex;
+	EVENTPP_ALIGN_CACHELINE Mutex freeListMutex;
 	BufferedItemList freeList;
 };
 

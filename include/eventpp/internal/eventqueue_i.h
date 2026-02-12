@@ -28,11 +28,11 @@ template <typename T>
 struct CounterGuard
 {
 	explicit CounterGuard(T & v) : value(v) {
-		++value;
+		value.fetch_add(1, std::memory_order_acq_rel);
 	}
 
 	~CounterGuard() {
-		--value;
+		value.fetch_sub(1, std::memory_order_release);
 	}
 
 	T & value;
