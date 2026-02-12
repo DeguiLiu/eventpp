@@ -19,3 +19,7 @@ set(THREADS_PREFER_PTHREAD_FLAG ON)
 find_package(Threads REQUIRED)
 target_link_libraries(${TARGET_BENCHMARK} Threads::Threads)
 
+# Standalone raw EventQueue benchmark (OPT-1~8 performance validation)
+add_executable(b9_raw_benchmark b9_eventqueue_raw_benchmark.cpp)
+target_link_libraries(b9_raw_benchmark Threads::Threads)
+

@@ -134,9 +134,12 @@ eventpp::EventQueue<int, void(const Payload&), MyPolicies> queue;
 ```bash
 cd tests && mkdir -p build && cd build
 cmake .. -DCMAKE_BUILD_TYPE=Release
-cmake --build . --target unittest -j$(nproc)
-ctest --output-on-failure    # 209 个测试用例
+cmake --build . --target unittest --target b9_raw_benchmark -j$(nproc)
+ctest --output-on-failure    # 209+ 测试用例
+./benchmark/b9_raw_benchmark  # 性能基准测试
 ```
+
+详细优化技术报告见 [doc/optimization_report.md](doc/optimization_report.md)。
 
 ## C++ 标准
 
