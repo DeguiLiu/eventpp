@@ -55,7 +55,7 @@ eventpp::EventDispatcher<MyEventType, void(const MyEvent &), MyEventPolicies> di
 dispatcher.dispatch(MyEvent { MyEventType::redraw });
 ```
 
-（提示：若想了解上面代码中的 `MyEventPolicies` ，请阅读https://github.com/wqking/eventpp/blob/master/doc/policies.md 文档。本篇文档中可以暂且只关注分发器： `eventpp::EventDispatcher<MyEventType, void(const MyEvent &)> dispatcher`）
+（提示：若想了解上面代码中的 `MyEventPolicies` ，请阅读 [policies](policies.md) 文档。本篇文档中可以暂且只关注分发器： `eventpp::EventDispatcher<MyEventType, void(const MyEvent &)> dispatcher`）
 
 EventDispatcher 的缺点是，分发器中所有事件都必须有相同的回调原型（例如示例代码中的 `void(const MyEvnet &)`）。通常可以通过下面的方案来规避该缺点：将 Event 基类作为回调函数的参数，然后所有的事件都通过继承 Event 来传递他们自己的数据。在示例代码中，`MyEvent` 就是事件的基类，回调函数接收 `const MyEvent &` 。
 

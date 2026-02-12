@@ -42,7 +42,7 @@ class CallbackList;
 ```
 
 `Prototype`：回调函数原型。该参数应为 C++ 函数类型，如 `void(int, std::string, const MyClass *)`。  
-`Policies`：用于配置和扩展回调函数列表的规则。默认值为 `DefaultPolicies` 。详见 [policy 文档](https://github.com/marsCatXdu/eventpp/blob/master/doc/policies.md)
+`Policies`：用于配置和扩展回调函数列表的规则。默认值为 `DefaultPolicies` 。详见 [policy 文档](policies.md)
 
 <a id="a3_3"></a>
 ### 公共类型

@@ -1,7 +1,27 @@
 # Benchmarks
 
-Hardware: HP laptop, Intel(R) Core(TM) i5-8300H CPU @ 2.30GHz, 16 GB RAM  
-Software: Windows 10, MinGW GCC 11.3.0, MSVC 2022  
+## v0.3.0 PoolAllocator Throughput (EventQueue enqueue/process)
+
+Hardware: Ubuntu 24.04, GCC 13.3, `-O3 -march=native`
+Test: single-thread EventQueue enqueue + process, varying batch sizes.
+
+| Batch size | DefaultPolicies (std::list) | PoolQueueList v0.2.0 | PoolQueueList v0.3.0 | v0.3.0 vs v0.2.0 |
+|:----------:|:--------------------------:|:--------------------:|:--------------------:|:-----------------:|
+| 1K msg | — | 22.7 M/s | 25.9 M/s | +14% |
+| 10K msg | — | 31.9 M/s | 33.1 M/s | +4% |
+| 100K msg | — | 25.2 M/s | 31.7 M/s | +26% |
+| 1M msg | — | 21.5 M/s | 31.2 M/s | +45% |
+
+> v0.2.0 在 100K/1M 场景下 slab 耗尽回退到 `::operator new`，v0.3.0 的多级 slab 链式扩展（OPT-9a）彻底消除此问题。
+
+---
+
+## v0.1.3 Original Benchmarks
+
+The benchmarks below are from the original [wqking/eventpp](https://github.com/wqking/eventpp) v0.1.3.
+
+Hardware: HP laptop, Intel(R) Core(TM) i5-8300H CPU @ 2.30GHz, 16 GB RAM
+Software: Windows 10, MinGW GCC 11.3.0, MSVC 2022
 Time unit: milliseconds (unless explicitly specified)  
 
 Unless it's specified, the default compiler is GCC.  

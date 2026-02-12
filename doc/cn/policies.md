@@ -143,7 +143,7 @@ dispatcher.dispatch(MyEvent(3));
 
 **适用于**：CallbackList, EventDispatcher, EventQueue
 
-Mixin 用于向 EventDispatcher / EventQueue 继承层次中注入代码，以扩展它们的功能。更多细节请参阅 https://github.com/wqking/eventpp/blob/master/doc/mixins.md
+Mixin 用于向 EventDispatcher / EventQueue 继承层次中注入代码，以扩展它们的功能。更多细节请参阅 [mixins](mixins.md)
 
 <a id="callback"></a>
 
@@ -188,7 +188,7 @@ struct MultipleThreading
 
 当只有较少的线程时（和 CPU 核心数差不多的线程数），`eventpp::SpinLock` 的性能比 `std::mutex` 更高一些。当线程数超过 CPU 核心数时， `eventpp::SpinLock` 的性能弱于 `std::mutex` 。
 
-基准测试相关数据请参阅：https://github.com/wqking/eventpp/blob/master/doc/benchmark.md
+基准测试相关数据请参阅：[benchmark](benchmark.md)
 
 下面是使用 `SpinLock` 的示例代码：
 
@@ -401,7 +401,7 @@ void splice(const_iterator pos, QueueList & other );
 void splice(const_iterator pos, QueueList & other, const_iterator it);
 ```
 
-eventpp 中的有序队列列表 OrderedQueueList 就是一个应用实例。详细内容请阅 https://github.com/wqking/eventpp/blob/master/doc/orderedqueuelist.md
+eventpp 中的有序队列列表 OrderedQueueList 就是一个应用实例。详细内容请阅 [orderedqueuelist](orderedqueuelist.md)
 
 <a id="how-to-use-policies"></a>
 

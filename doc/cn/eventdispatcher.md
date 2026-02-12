@@ -47,7 +47,7 @@ class EventDispatcher;
 
 `Prototype`：监听器的原型。其应为 C++ 函数类型，例如 `void(int, std::string, const MyClass *)`。
 
-`Policies`：配置和扩展调度器的规则。默认值是 `DefaultPolicies`。 详情请阅读https://github.com/wqking/eventpp/blob/master/doc/policies.md 文档。
+`Policies`：配置和扩展调度器的规则。默认值是 `DefaultPolicies`。 详情请阅读 [policies](policies.md) 文档。
 
 <a id="public-types"></a>
 
@@ -206,7 +206,7 @@ void dispatch(T && first, Args ...args);
 
 该函数是同步的。所有监听器都会在调用 `dispatch` 的线程中被调用。
 
-这两个重载函数略有区别，具体如何使用要根据 `ArgumentPassingMode` 策略而定。详情请阅读https://github.com/wqking/eventpp/blob/master/doc/policies.md 文档。
+这两个重载函数略有区别，具体如何使用要根据 `ArgumentPassingMode` 策略而定。详情请阅读 [policies](policies.md) 文档。
 
 <a id="nested-listener-safety"></a>
 

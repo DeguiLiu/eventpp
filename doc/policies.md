@@ -191,16 +191,19 @@ eventpp::EventDispatcher<int, void (), MyEventPolicies> dispatcher;
 eventpp::CallbackList<void (), MyEventPolicies> callbackList;
 ```
 
-`eventpp` provides a shortcut template class to customize the threading.  
+`eventpp` provides a shortcut template class to customize the threading.
 ```c++
 template <
     typename Mutex_,
     template <typename > class Atomic_ = std::atomic,
-    typename ConditionVariable_ = std::condition_variable
+    typename ConditionVariable_ = std::condition_variable,
+    typename SharedMutex_ = std::shared_timed_mutex
 >
 struct GeneralThreading
 {
     using Mutex = Mutex_;
+
+    using SharedMutex = SharedMutex_;
 
     template <typename T>
     using Atomic = Atomic_<T>;
@@ -360,10 +363,22 @@ void splice(const_iterator pos, QueueList & other, const_iterator it);
 
 [OrderedQueueList](orderedqueuelist.md) in eventpp is a good example.
 
+eventpp also provides `PoolQueueList`, a pool-allocated queue list that eliminates per-node heap allocation.
+
+```c++
+#include <eventpp/eventqueue.h>
+
+struct MyPolicies {
+    template <typename T>
+    using QueueList = eventpp::PoolQueueList<T, 8192>;  // 8192 slots per slab
+};
+eventpp::EventQueue<int, void(const Message&), MyPolicies> queue;
+```
+
 <a id="a2_3"></a>
 ## How to use policies
 
-To use policies, declare a struct, define the policies in it, and pass the struct to CallbackList, EventDispatcher, or EventQueue.  
+To use policies, declare a struct, define the policies in it, and pass the struct to CallbackList, EventDispatcher, or EventQueue.
 ```c++
 struct MyPolicies //the struct name doesn't matter
 {
@@ -375,3 +390,32 @@ struct MyPolicies //the struct name doesn't matter
 EventDispatcher<int, void(const MyEvent &), MyPolicies> dispatcher;
 ```
 Above sample code shows a policies class, which only redefined 'getEvent', and leave all other policies default.
+
+<a id="a2_4"></a>
+## HighPerfPolicy (v0.3.0)
+
+`HighPerfPolicy` is a predefined policies class that combines the optimal performance settings in a single, zero-configuration preset:
+
+- **SpinLock** (with exponential backoff) as Mutex — optimal for short critical sections
+- **PoolQueueList** (8192 slots per slab) — eliminates per-node heap allocation jitter
+- **shared_mutex** for read-write lock separation in EventDispatcher
+
+```c++
+#include <eventpp/eventqueue.h>
+
+// Zero configuration — one line
+eventpp::EventQueue<int, void(const Message&), eventpp::HighPerfPolicy> queue;
+```
+
+This is equivalent to the manual configuration:
+
+```c++
+struct ManualHighPerf {
+    using Threading = eventpp::GeneralThreading<eventpp::SpinLock>;
+    template <typename T>
+    using QueueList = eventpp::PoolQueueList<T, 8192>;
+};
+eventpp::EventQueue<int, void(const Message&), ManualHighPerf> queue;
+```
+
+`HighPerfPolicy` is recommended for production use in latency-sensitive or high-throughput scenarios.

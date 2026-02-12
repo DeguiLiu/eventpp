@@ -15,8 +15,8 @@ Here lists all possible methods to use `eventpp`.
 
 ## Include the source code in your project directly
 
-eventpp is header only library. Just clone the source code, or use git submodule, then add the 'include' folder inside eventpp to your project include directory, then you can use the library.  
-You don't need to link to any source code.  
+eventpp is header only library. Just clone the source code, or use git submodule, then add the 'include' folder inside eventpp to your project include directory, then you can use the library.
+You don't need to link to any source code.
 
 ## Use CMake FetchContent
 
@@ -26,79 +26,19 @@ Add below code to your CMake file
 include(FetchContent)
 FetchContent_Declare(
     eventpp
-    GIT_REPOSITORY https://github.com/wqking/eventpp
-    GIT_TAG        d2db8af2a46c79f8dc75759019fba487948e9442 # v0.1.3
+    GIT_REPOSITORY https://gitee.com/liudegui/eventpp.git
+    GIT_TAG        master
+    GIT_SHALLOW    TRUE
 )
 FetchContent_MakeAvailable(eventpp)
+target_include_directories(your_target PRIVATE ${eventpp_SOURCE_DIR}/include)
 ```
 
 Then `eventpp` is available to your project. If `GIT_TAG` is omitted, the latest code on master branch will be used.
 
-## Use Vcpkg package manager
+## Use Vcpkg / Conan / Hunter / Homebrew
 
-```
-vcpkg install eventpp
-```
-
-Then in your CMake project CMakeLists.txt file, put below code, remember to replace ${TARGET} with your target,
-
-```
-find_package(eventpp CONFIG REQUIRED)
-target_link_libraries(${TARGET} PRIVATE eventpp::eventpp)
-find_path(EVENTPP_INCLUDE_DIR eventpp/eventqueue.h)
-include_directories(${EVENTPP_INCLUDE_DIR})
-```
-
-Then run cmake, note you need -DCMAKE_TOOLCHAIN_FILE to specify vcpkg, and replace -G with your generator
-```
-cmake .. -DCMAKE_TOOLCHAIN_FILE=VCPKGDIR/vcpkg/scripts/buildsystems/vcpkg.cmake -G"MinGW Makefiles"
-```
-
-Note with vcpkg, only the released version can be used, which may be behind the latest update. You can't use the minor update on the master branch.
-
-## Use Conan package manager
-
-In your CMake project, add a conanlist.txt file that should contain,
-
-```
-[requires]
-eventpp/0.1.3
-
-[generators]
-CMakeDeps
-CMakeToolchain
-```
-
-Then in your CMakeLists, add,
-
-```
-find_package(eventpp CONFIG REQUIRED)
-target_link_libraries(${TARGET} PRIVATE eventpp::eventpp)
-```
-
-Then run `conan install . --output-folder=build --build=missing` in your project folder (assuming the default conan profile exists and is okay).  
-Then cd into folder build, run `cmake .. -DCMAKE_TOOLCHAIN_FILE=conan_toolchain.cmake -G "Whatever generator you want" -DCMAKE_BUILD_TYPE=Release`, alternatively it can also use cmake presets instead of passing the toolchain file on cmake >=3.23
-
-There are [more information here](https://github.com/wqking/eventpp/issues/70).
-
-## Use Hunter package manager
-
-You may follow the example code on [Hunter document](https://hunter.readthedocs.io/en/latest/packages/pkg/eventpp.html). Below is the code snippet from that document,  
-
-```
-hunter_add_package(eventpp)
-find_package(eventpp CONFIG REQUIRED)
-
-add_executable(main main.cpp)
-target_link_libraries(main eventpp::eventpp)
-include_directories(${EVENTPP_INCLUDE_DIR})
-```
-
-## Use Homebrew on macOS (or Linux)
-
-```
-brew install eventpp
-```
+> **Note**: The packages available via Vcpkg, Conan, Hunter, and Homebrew are from the original [wqking/eventpp](https://github.com/wqking/eventpp) v0.1.3, which does not include the performance optimizations (OPT-1 ~ OPT-14) in this fork. For the optimized version, use the CMake FetchContent method above.
 
 ## Install using CMake locally and use it in CMake
 

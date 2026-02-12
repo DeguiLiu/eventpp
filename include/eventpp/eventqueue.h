@@ -16,6 +16,7 @@
 
 #include "eventdispatcher.h"
 #include "internal/eventqueue_i.h"
+#include "internal/poolallocator_i.h"
 
 #include <tuple>
 #include <chrono>
