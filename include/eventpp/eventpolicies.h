@@ -127,6 +127,7 @@ struct SingleThreading
 	{
 		void lock() {}
 		void unlock() {}
+		bool try_lock() { return true; }
 	};
 
 	// OPT-3: No-op SharedMutex for single-threaded use.

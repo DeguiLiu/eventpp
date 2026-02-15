@@ -7,7 +7,7 @@ eventpp 提供三大核心组件：回调列表（CallbackList）、事件分发
 ![C++](https://img.shields.io/badge/C%2B%2B-14-blue)
 ![License](https://img.shields.io/badge/License-Apache--2.0-blue)
 ![Platform](https://img.shields.io/badge/Platform-ARM%20%7C%20x86-green)
-![Version](https://img.shields.io/badge/Version-v0.3.0-orange)
+![Version](https://img.shields.io/badge/Version-v0.4.0-orange)
 
 ## 相比 v0.1.3 解决的问题
 
@@ -25,6 +25,7 @@ eventpp 提供三大核心组件：回调列表（CallbackList）、事件分发
 | 内存序全部 `seq_cst` | 不必要的屏障指令开销 | 精确使用 `acq_rel` 语义 | 减少屏障指令 |
 | waitFor 直接 futex | 短等待场景系统调用开销大 | 自适应 spin-then-futex | 减少系统调用 |
 | 高性能配置需手动组合多个 Policy | 用户需了解 SpinLock、PoolQueueList、GeneralThreading 才能配置 | `HighPerfPolicy` 一站式预设 | 零配置获得最优组合 |
+| process() 分发链开销大 | 单消费者场景下 shared_lock + map.find + CallbackList + std::function 开销不必要 | `processQueueWith<Visitor>` 零开销编译期分发 | 单消费者场景 **15x 加速** |
 
 ## 快速开始
 
@@ -104,9 +105,42 @@ queue.process();
 
 更多 Policy 配置细节见 [doc/policies.md](doc/policies.md)。
 
+### processQueueWith（零开销分发）
+
+单消费者场景下，`process()` 需要经过 shared_lock + map.find + CallbackList + std::function 多层间接调用。
+`processQueueWith` 绕过全部分发基础设施，直接将事件传递给编译期已知的 Visitor，编译器可完全内联：
+
+```cpp
+// 定义 Visitor（编译期类型已知，可内联）
+struct MyVisitor {
+    void operator()(int event, const SensorData& d) {
+        switch(event) {
+            case 1: printf("Sensor %u: %.1f\n", d.id, d.value); break;
+            case 2: /* handle event 2 */ break;
+        }
+    }
+};
+
+eventpp::EventQueue<int, void(const SensorData&)> queue;
+queue.enqueue(1, SensorData{42, 25.3f});
+
+// 零开销分发: 15x faster than process()
+queue.processQueueWith(MyVisitor{});
+
+// Lambda 也支持
+queue.enqueue(1, SensorData{99, 36.6f});
+queue.processQueueWith([](int event, const SensorData& d) {
+    printf("Event %d: sensor %u = %.1f\n", event, d.id, d.value);
+});
+```
+
+详见 [docs/design_process_queue_with_zh.md](docs/design_process_queue_with_zh.md)。
+
 ## 性能数据
 
 测试环境：Ubuntu 24.04, GCC 13.3, `-O3 -march=native`
+
+### EventQueue 吞吐量
 
 | 场景 | 原版 v0.1.3 (std::list) | 本版本 PoolQueueList | 提升 |
 |------|:------:|:------:|:----:|
@@ -116,6 +150,16 @@ queue.process();
 | 1M msg | 基线 | 31.2 M/s | — |
 
 > 原版在大批量场景下每次 enqueue 都走 malloc，延迟不可预测。本版本 Pool 吞吐稳定在 25~33 M/s，无回退。
+
+### processQueueWith vs process() 分发延迟
+
+| 场景 | process() | processQueueWith() | 加速比 |
+|------|:---------:|:-------------------:|:------:|
+| 单事件 ID, 100K 消息 | 152 ns/msg | 9 ns/msg | **16.7x** |
+| 10 事件 ID, 100K 消息 | 152 ns/msg | 10 ns/msg | **15.2x** |
+| 10 事件 ID, 1M 消息 | 77 ns/msg | 21 ns/msg | **3.6x** |
+
+> processQueueWith 绕过 shared_lock + map.find + CallbackList + std::function，直接调用 Visitor。中位数 (P50): 6 ns/msg vs 155 ns/msg = 25x。
 
 ## 示例程序
 
@@ -132,8 +176,8 @@ queue.process();
 
 | 目录 | 内容 | 说明 |
 |------|------|------|
-| `unittest/` | 27 个测试文件, 210 用例, 1939 断言 | 覆盖核心组件、异构变体、线程安全、工具类 |
-| `benchmark/` | 8 个基准测试 | EventQueue 吞吐、CallbackList 调用开销、Pool 分配器性能 |
+| `unittest/` | 28 个测试文件, 220 用例, 1980 断言 | 覆盖核心组件、异构变体、线程安全、工具类、Visitor 分发 |
+| `benchmark/` | 9 个基准测试 | EventQueue 吞吐、CallbackList 调用开销、Pool 分配器、Visitor 分发性能 |
 | `tutorial/` | 9 个教程文件 | 各组件的入门用法示例 |
 
 ## 文档
@@ -155,9 +199,10 @@ queue.process();
 ```bash
 cd tests && mkdir -p build && cd build
 cmake .. -DCMAKE_BUILD_TYPE=Release
-cmake --build . --target unittest --target b9_raw_benchmark -j$(nproc)
-ctest --output-on-failure    # 210 测试用例
-./benchmark/b9_raw_benchmark  # 性能基准测试
+cmake --build . --target unittest --target b9_raw_benchmark --target b10_visitor_benchmark -j$(nproc)
+ctest --output-on-failure    # 220 测试用例
+./benchmark/b9_raw_benchmark       # 性能基准测试
+./benchmark/b10_visitor_benchmark  # Visitor 分发性能对比
 ```
 
 ## C++ 标准

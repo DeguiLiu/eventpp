@@ -23,3 +23,7 @@ target_link_libraries(${TARGET_BENCHMARK} Threads::Threads)
 add_executable(b9_raw_benchmark b9_eventqueue_raw_benchmark.cpp)
 target_link_libraries(b9_raw_benchmark Threads::Threads)
 
+# OPT-15: processQueueWith vs process() benchmark
+add_executable(b10_visitor_benchmark b10_visitor_benchmark.cpp)
+target_link_libraries(b10_visitor_benchmark Threads::Threads)
+

@@ -249,6 +249,79 @@ public:
 		return false;
 	}
 
+	// OPT-15: Zero-overhead visitor dispatch.
+	// Bypasses the entire EventDispatcher infrastructure:
+	// no shared_lock, no map lookup, no CallbackList traversal,
+	// no std::function indirection.
+	// Visitor protocol: visitor(event, args...)
+	template <typename Visitor>
+	bool processQueueWith(Visitor && visitor)
+	{
+		if(! queueList.empty()) {
+			BufferedItemList tempList;
+
+			CounterGuard<decltype(queueEmptyCounter)> counterGuard(queueEmptyCounter);
+
+			{
+				std::lock_guard<Mutex> queueListLock(queueListMutex);
+				std::swap(queueList, tempList);
+			}
+
+			if(! tempList.empty()) {
+				for(auto & item : tempList) {
+					doVisitQueuedEvent(
+						visitor,
+						item.get(),
+						typename MakeIndexSequence<sizeof...(Args)>::Type()
+					);
+					item.clear();
+				}
+
+				std::lock_guard<Mutex> queueListLock(freeListMutex);
+				freeList.splice(freeList.end(), tempList);
+
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	// OPT-15: Single-event variant of processQueueWith.
+	template <typename Visitor>
+	bool processOneWith(Visitor && visitor)
+	{
+		if(! queueList.empty()) {
+			BufferedItemList tempList;
+
+			CounterGuard<decltype(queueEmptyCounter)> counterGuard(queueEmptyCounter);
+
+			{
+				std::lock_guard<Mutex> queueListLock(queueListMutex);
+				if(! queueList.empty()) {
+					tempList.splice(tempList.end(), queueList, queueList.begin());
+				}
+			}
+
+			if(! tempList.empty()) {
+				auto & item = tempList.front();
+				doVisitQueuedEvent(
+					visitor,
+					item.get(),
+					typename MakeIndexSequence<sizeof...(Args)>::Type()
+				);
+				item.clear();
+
+				std::lock_guard<Mutex> queueListLock(freeListMutex);
+				freeList.splice(freeList.end(), tempList);
+
+				return true;
+			}
+		}
+
+		return false;
+	}
+
 	bool processOne()
 	{
 		if(! queueList.empty()) {
@@ -508,6 +581,13 @@ protected:
 	void doDispatchQueuedEvent(T && item, IndexSequence<Indexes...>)
 	{
 		this->directDispatch(item.event, std::get<Indexes>(item.arguments)...);
+	}
+
+	// OPT-15: Direct visitor dispatch -- bypasses directDispatch/map/CallbackList.
+	template <typename V, typename T, size_t ...Indexes>
+	void doVisitQueuedEvent(V && visitor, T && item, IndexSequence<Indexes...>)
+	{
+		visitor(item.event, std::get<Indexes>(item.arguments)...);
 	}
 
 	template <typename F, typename T, size_t ...Indexes>
