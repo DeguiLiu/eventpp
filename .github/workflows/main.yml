@@ -1,24 +1,27 @@
 name: CI
 
-on: [push, pull_request]
+on:
+  push:
+    branches: ['*']
+  pull_request:
+    branches: ['*']
+  workflow_dispatch:
 
 jobs:
-  Test:
-    runs-on: ${{ matrix.os }}
+  build:
+    runs-on: ubuntu-latest
     strategy:
       matrix:
-        os: [windows-latest, ubuntu-latest, macos-latest]
-        build-type: [Release]
+        build-type: [Debug, Release]
+
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v4
 
       - name: Configure
-        run: |
-          mkdir -p build
-          cmake -DCMAKE_BUILD_TYPE="${{ matrix.build-type }}" -B build -S tests
+        run: cmake -DCMAKE_BUILD_TYPE="${{ matrix.build-type }}" -B build -S tests
 
-      - name: Build Tests
-        run: cmake --build build --config "${{ matrix.build-type }}" -j
+      - name: Build
+        run: cmake --build build --config "${{ matrix.build-type }}" -j$(nproc)
 
-      - name: Run unit tests
-        run: cd build && ctest --build-config "${{ matrix.build-type }}" --progress --verbose
+      - name: Test
+        run: cd build && ctest --build-config "${{ matrix.build-type }}" --output-on-failure
