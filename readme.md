@@ -1,38 +1,59 @@
 [中文](readme_zh.md) | **English**
 
-> 基于 [wqking/eventpp](https://github.com/wqking/eventpp) v0.1.3 独立维护，完全兼容原版 API。
+# eventpp -- High-Performance C++ Event Library
 
-> Independently maintained fork of [wqking/eventpp](https://github.com/wqking/eventpp) v0.1.3, with 8 cross-platform performance optimizations.
+> Independently maintained fork of [wqking/eventpp](https://github.com/wqking/eventpp) v0.1.3, fully compatible with the original API.
 
 [![CI](https://github.com/DeguiLiu/eventpp/actions/workflows/main.yml/badge.svg)](https://github.com/DeguiLiu/eventpp/actions/workflows/main.yml)
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
-## 相比 v0.1.3 解决的问题
+eventpp provides three core components: CallbackList, EventDispatcher, and EventQueue, supporting common patterns such as signal/slot, publish/subscribe, and observer.
 
-原版 eventpp v0.1.3 在高并发和嵌入式实时场景下存在以下问题，本维护版本逐一解决：
+## Problems Solved (vs v0.1.3)
 
-| 问题 | 影响 | 解决方案 | 收益 |
-|------|------|----------|------|
-| SpinLock 空转无 CPU hint | ARM/x86 自旋时功耗高、缓存行频繁 bouncing | 平台感知的 `YIELD`/`PAUSE` 指令 + 指数退避 | 降低自旋功耗，减少高竞争下缓存行抖动 |
-| CallbackList 每次回调都加锁 | 监听器多时，多线程并发调用个别请求延迟飙高 | 批量预取（每 8 节点加锁一次） | 尾部延迟大幅降低 |
-| EventDispatcher 读写互斥 | 多线程 dispatch 相互阻塞 | `shared_mutex` 读写分离 | 多线程 dispatch 不互斥 |
-| EventQueue 入队锁竞争 | 多生产者 enqueue 串行化 | `try_lock` 非阻塞 freeList + lock-free CAS 分配 | 消除入队锁竞争 |
-| 每次 enqueue 都 malloc | 堆分配抖动，延迟不可预测 | PoolAllocator 池化分配器 | 小批量吞吐 +33% |
-| 大批量事件 Pool 耗尽回退 malloc | 100K+ 事件时 Pool 优势消失 | 多级 slab 链式扩展（借鉴 iceoryx MemPool） | 100K 吞吐 +26%，1M 吞吐 +45% |
-| Cache-line 大小硬编码 64B | Apple Silicon 128B prefetch 下 false sharing | 平台自动检测（Apple Silicon 128B / 其他 64B） | 正确的 false sharing 防御 |
-| 内存序全部 `seq_cst` | 不必要的屏障指令开销 | 精确使用 `acq_rel` 语义 | 减少屏障指令 |
-| waitFor 直接 futex | 短等待场景系统调用开销大 | 自适应 spin-then-futex | 减少系统调用 |
-| 高性能配置需手动组合多个 Policy | 用户需了解 SpinLock、PoolQueueList、GeneralThreading 才能配置 | `HighPerfPolicy` 一站式预设 | 零配置获得最优组合 |
-| process() 分发链开销大 | 单消费者场景下 shared_lock + map.find + CallbackList + std::function 开销不必要 | `processQueueWith<Visitor>` 零开销编译期分发 | 单消费者场景 **15x 加速** |
+The original eventpp v0.1.3 has several issues under high-concurrency and embedded real-time scenarios. This fork addresses them:
 
-| Scenario | Before (v0.1.3) | After | Improvement |
-|----------|:---------------:|:-----:|:-----------:|
-| Raw EventQueue (10K msg) | 23.5 M/s | 22.0 M/s | On par |
-| PoolQueueList (10K msg) | -- | 29.2 M/s | +33% |
+| Problem | Impact | Solution | Benefit |
+|---------|--------|----------|---------|
+| SpinLock without CPU hint | High power consumption during spin on ARM/x86 | Platform-aware `YIELD`/`PAUSE` + exponential backoff | Reduced spin power, less cache-line bouncing |
+| CallbackList locks on every callback | Tail latency spikes with many listeners | Batched prefetch (lock once per 8 nodes) | Significant P99 latency reduction |
+| EventDispatcher read-write mutual exclusion | Multi-threaded dispatch blocks each other | `shared_mutex` read-write separation | Concurrent dispatch without blocking |
+| EventQueue enqueue lock contention | Multi-producer enqueue serialized | `try_lock` non-blocking freeList + lock-free CAS | Eliminated enqueue contention |
+| malloc on every enqueue | Heap allocation jitter, unpredictable latency | PoolAllocator pooled allocator | Small-batch throughput +33% |
+| Pool exhaustion falls back to malloc | Pool advantage lost at 100K+ events | Multi-level slab chain expansion (inspired by iceoryx MemPool) | 100K throughput +26%, 1M throughput +45% |
+| Cache-line size hardcoded to 64B | False sharing on Apple Silicon (128B prefetch) | Platform auto-detection (Apple Silicon 128B / others 64B) | Correct false sharing prevention |
+| All memory ordering `seq_cst` | Unnecessary barrier instruction overhead | Precise `acq_rel` semantics | Fewer barrier instructions |
+| waitFor uses futex directly | Syscall overhead for short waits | Adaptive spin-then-futex | Fewer syscalls |
+| High-perf config requires manual Policy combination | Users must know SpinLock, PoolQueueList, GeneralThreading | `HighPerfPolicy` one-stop preset | Zero-config optimal combination |
+| process() dispatch chain overhead | shared_lock + map.find + CallbackList + std::function unnecessary for single consumer | `processQueueWith<Visitor>` zero-overhead compile-time dispatch | **15x speedup** in single-consumer scenarios |
+
+## Performance Data
+
+Test environment: Ubuntu 24.04, GCC 13.3, `-O3 -march=native`
+
+### EventQueue Throughput
+
+| Scenario | Before (v0.1.3) | After (PoolQueueList) | Improvement |
+|----------|:---------------:|:---------------------:|:-----------:|
+| 10K msg | 23.5 M/s | 33.1 M/s | +41% |
+| 100K msg | baseline | 31.7 M/s | -- |
+| 1M msg | baseline | 31.2 M/s | -- |
+
+### processQueueWith vs process()
+
+| Scenario | process() | processQueueWith() | Speedup |
+|----------|:---------:|:-------------------:|:-------:|
+| 1 event ID, 100K msg | 152 ns/msg | 9 ns/msg | **16.7x** |
+| 10 event IDs, 100K msg | 152 ns/msg | 10 ns/msg | **15.2x** |
+| 10 event IDs, 1M msg | 77 ns/msg | 21 ns/msg | **3.6x** |
+
+### End-to-End
+
+| Metric | Before | After | Improvement |
+|--------|:------:|:-----:|:-----------:|
 | Active Object throughput (10K) | ~1.6 M/s | 3.9 M/s | 2.5x |
 | Active Object sustained (5s) | ~1.25 M/s | 3.5 M/s | 2.8x |
 | E2E P50 latency | ~1,200 ns | 626 ns | 48% lower |
-| Test suite runtime | ~23 s | ~18 s | 22% lower |
 
 ## Quick Start
 
@@ -88,6 +109,7 @@ struct SensorData {
     float value;
 };
 
+// HighPerfPolicy = SpinLock + PoolAllocator + shared_mutex, zero config
 eventpp::EventQueue<int, void(const SensorData&), eventpp::HighPerfPolicy> queue;
 
 queue.appendListener(1, [](const SensorData& d) {
@@ -98,7 +120,7 @@ queue.enqueue(1, SensorData{42, 25.3f});
 queue.process();
 ```
 
-### processQueueWith
+### processQueueWith (Zero-Overhead Dispatch)
 
 ```cpp
 struct MyVisitor {
@@ -113,9 +135,12 @@ struct MyVisitor {
 eventpp::EventQueue<int, void(const SensorData&)> queue;
 queue.enqueue(1, SensorData{42, 25.3f});
 
+// Bypasses shared_lock + map.find + CallbackList + std::function
 // 15x faster than process()
 queue.processQueueWith(MyVisitor{});
 ```
+
+See [doc/design_process_queue_with_zh.md](doc/design_process_queue_with_zh.md) for design details.
 
 ## Documentation
 
@@ -140,6 +165,13 @@ queue.processQueueWith(MyVisitor{});
 | `include/eventpp/eventqueue.h` | OPT-4, OPT-6, OPT-8, OPT-15 |
 | `include/eventpp/internal/eventqueue_i.h` | OPT-7 |
 | `include/eventpp/internal/poolallocator_i.h` | OPT-5 (new) |
+
+## Examples
+
+| Example | File | Description |
+|---------|------|-------------|
+| HighPerfPolicy basics | `example_highperf_eventqueue.cpp` | DefaultPolicies vs HighPerfPolicy MPSC throughput comparison |
+| Active Object + HSM | `example_active_object_hsm.cpp` | Active Object pattern, hierarchical state machine, shared_ptr zero-copy |
 
 ## Build and Test
 
